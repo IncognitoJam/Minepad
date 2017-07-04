@@ -1,0 +1,10 @@
+name: Minepad
+version: 1.0
+main: com.github.incognitojam.minepad.Minepad
+authors: [IncognitoJam]
+description: Plugin library to allow the use of controllers in Minecraft
+
+commands:
+  controller:
+    description: No description
+    usage: controller [connect|disconnect]

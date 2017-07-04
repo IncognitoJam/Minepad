@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Minepad</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/0.99.0/css/materialize.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+    <style>
+        .modal-footer {
+            padding: 4px 20px !important;
+        }
+    </style>
+</head>
+<body>
+    <nav class="teal">
+        <div class="nav-wrapper container">
+            <a href="#" class="brand-logo"><i class="material-icons">gamepad</i>Minepad</a>
+        </div>
+    </nav>
+
+    <div id="modal_server" class="modal">
+        <div class="progress">
+            <div class="indeterminate"></div>
+        </div>
+        <div class="modal-content">
+            <h4><i class="material-icons">settings_ethernet</i> Connecting to server..</h4>
+            <p>Please wait a moment whilst a connection is made.</p>
+        </div>
+        <div class="modal-footer">
+            Waiting for response..
+        </div>
+    </div>
+
+    <div id="modal_controller" class="modal">
+        <div class="modal-content">
+            <h4><i class="material-icons">gamepad</i> Please connect a controller</h4>
+            <p>You can connect an Xbox 360 or Xbox One controller to your computer now.</p>
+        </div>
+        <div class="modal-footer">
+            Waiting..
+        </div>
+    </div>
+
+    <div id="modal_error" class="modal">
+        <div class="modal-content">
+            <h4 id="modal_error_title">Title</h4>
+            <p id="modal_error_desc">Description</p>
+        </div>
+        <div class="modal-footer">
+            <a href="#" class="modal-action modal-close waves-effect waves-green btn-flat">Close</a>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-2.1.1.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/0.99.0/js/materialize.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/2.0.3/socket.io.js"></script>
+    <script src="https://cdn.rawgit.com/kallaspriit/HTML5-JavaScript-Gamepad-Controller-Library/c38f53b8/gamepad.js"></script>
+    <script>
+        var socket = io.connect("http://5.66.59.28:9092");
+        var state = "wait_code_response";
+        var controllerConnected = false;
+        var closeModal = false;
+
+        socket.on("validate_code_result", function (validated) {
+            console.log("Event \"validate_code_result\": validated: " + validated);
+
+            // Hide server modal
+            modal("server", "close");
+
+            if (validated) {
+                toast("Connection successful!");
+                if (controllerConnected) {
+                    state = "ready";
+                } else {
+                    toast("Waiting for controller");
+                    state = "wait_controller";
+                    modal("controller", "open");
+                }
+            } else {
+                errorModal("Invalid code",
+                    "The server reported that the code which was provided by was invalid. Please close the web interface and try again.");
+            }
+        });
+
+        var disconnectHandler = function (message) {
+            state = "disconnected";
+            errorModal("You have been disconnected", "The server disconnected you with the reason: \"" + message +
+                "\". Please close the web interface and try again.");
+            toast("Disconnected by server")
+        };
+
+        socket.on("disconnect", disconnectHandler);
+        socket.on("force_disconnect", disconnectHandler);
+
+        function isDeviceXbox(device) {
+            return device.id.toLowerCase().indexOf("xbox") !== -1;
+        }
+
+        function modal(name, action) {
+            console.log("modal(name: \"" + name + "\", action: \"" + action + "\")");
+
+            if (action === "close") {
+                closeModal = true;
+            }
+            $("#modal_" + name).modal(action);
+        }
+
+        function toast(message, duration) {
+            Materialize.toast($('<span>' + message + '</span>'), duration || 3000)
+        }
+
+        function errorModal(title, description) {
+            console.log("errorModal(title: \"" + title + "\", description: \"" + description + "\")");
+
+            $("#modal_error_title").text(title);
+            $("#modal_error_desc").text(description);
+            modal("error", "open");
+        }
+
+        function updateControl(control, value) {
+            if (state === "ready") {
+                socket.emit("update_state", JSON.stringify({
+                    "control": control,
+                    "value": value
+                }));
+            }
+        }
+
+        $(document).ready(function () {
+            window.gamepad = new Gamepad();
+            gamepad.bind(Gamepad.Event.CONNECTED, function (device) {
+                if (isDeviceXbox(device)) {
+                    if (state === "wait_controller") {
+                        state = "ready";
+                        modal("controller", "close");
+                    }
+                    if (!controllerConnected) toast("Controller connected");
+                    controllerConnected = true;
+
+                    socket.emit("gamepad_state", true);
+                }
+            });
+
+            gamepad.bind(Gamepad.Event.DISCONNECTED, function (device) {
+                if (isDeviceXbox(device)) {
+                    controllerConnected = false;
+                    if (state === "ready") {
+                        state = "wait_controller";
+                        modal("controller", "open");
+                    }
+                    toast("Controller disconnected");
+
+                    socket.emit("gamepad_state", false);
+                }
+            });
+
+            gamepad.bind(Gamepad.Event.UNSUPPORTED, function (device) {
+                errorModal("Controller unsupported", "This controller is unsupported. Please connect a different controller.");
+            });
+
+            gamepad.bind(Gamepad.Event.BUTTON_DOWN, function (e) {
+                console.log("button_down, control: " + e.control);
+                updateControl(e.control, 1.0);
+            });
+
+            gamepad.bind(Gamepad.Event.BUTTON_UP, function (e) {
+                console.log("button_up, control: " + e.control);
+                updateControl(e.control, 0.0);
+            });
+
+            gamepad.bind(Gamepad.Event.AXIS_CHANGED, function (e) {
+                console.log("axis_changed, axis: " + e.axis + ", value: " + e.value);
+                updateControl(e.axis, e.value);
+            });
+
+            if (!gamepad.init()) {
+                errorModal("Unsupported browser",
+                    "Your browser does not support gamepads. Please install a modern browser such as Google Chrome or Firefox.");
+            }
+
+            // Initialise server modal
+            $("#modal_server").modal({
+                dismissible: false,
+                opacity: .5,
+                inDuration: 200,
+                outDuration: 300
+            });
+
+            // Initialise error modal
+            $("#modal_error").modal({
+                dismissible: false,
+                opacity: .5,
+                inDuration: 300,
+                outDuration: 300
+            });
+
+            // Initialise controller modal
+            $("#modal_controller").modal({
+                dismissible: false,
+                opacity: .5,
+                inDuration: 300,
+                outDuration: 300
+            });
+
+            // Show server modal
+            modal("server", "open");
+
+            // Begin code validation process
+            socket.emit("validate_code", code);
+            console.log("Emit Event \"validate_code\": code: " + code)
+        });
+
+        // Retrieve the controller code from the URL
+        var url_string = window.location.href;
+        var url = new URL(url_string);
+        var code = url.searchParams.get("code");
+    </script>
+</body>
+</html>
